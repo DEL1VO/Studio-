@@ -20,6 +20,7 @@ from pathlib import Path
 
 import aiohttp
 import firebase_admin
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -359,7 +360,20 @@ async def projects(c: CallbackQuery):
     await c.answer()
 
 
+async def run_web() -> None:
+    """Отдаёт мини-апп (index.html) по домену Bothost, порт PORT (по умолчанию 3000)."""
+    page = Path(__file__).with_name("index.html")
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.FileResponse(page))
+    app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", "3000"))).start()
+    log.info("mini app served on port %s", os.environ.get("PORT", "3000"))
+
+
 async def main():
+    await run_web()
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
