@@ -8,6 +8,8 @@ ElevenLabs (озвучка), Blender (blender_worker.py), Bothost.ru (хости
 """
 import asyncio
 import io
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -17,6 +19,7 @@ import time
 import uuid
 import wave
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 import aiohttp
 import firebase_admin
@@ -336,7 +339,10 @@ async def go(c: CallbackQuery, state: FSMContext, bot: Bot):
         scene_json.write_text(json.dumps({"style": data.get("style", "classic"),
                                           "scenes": scene_out}, ensure_ascii=False))
         await fb_set(f"clients/{uid}/projects/{pid}",
-                     {"status": "rendering", "preview": preview, "created": int(time.time())})
+                     {"status": "rendering", "preview": preview, "created": int(time.time()),
+                      "title": (data["scenes"][0]["setting"] or "Мультфильм")[:40].capitalize(),
+                      "eta": int(time.time()) + (90 if preview else 240),
+                      "total": 90 if preview else 240})
         await status.edit_text("🎨 Blender строит скелеты и анимацию…")
         out = pdir / "result.mp4"
         await run_blender(scene_json, out, preview)
@@ -360,11 +366,52 @@ async def projects(c: CallbackQuery):
     await c.answer()
 
 
+def verify_init_data(init_data: str) -> dict | None:
+    """Проверка подписи Telegram: возвращает данные пользователя или None."""
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        got = pairs.pop("hash", "")
+        check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+        secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calc, got):
+            return None
+        if time.time() - int(pairs.get("auth_date", 0)) > 86400:
+            return None
+        return json.loads(pairs["user"])
+    except Exception:
+        return None
+
+
+async def api_me(request: web.Request) -> web.Response:
+    """Данные клиента для мини-аппа (только после проверки подписи Telegram)."""
+    u = verify_init_data(request.headers.get("X-Init-Data", ""))
+    if not u:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    uid = str(u["id"])
+    client = await fb_get(f"clients/{uid}") or {}
+    lib = await fb_get("library/characters") or {}
+    projects = client.get("projects") or {}
+    chars = client.get("characters") or {}
+    return web.json_response({
+        "admin": u["id"] in ADMIN_IDS,
+        "characters": [{"name": n, "voice": v.get("voice", "")} for n, v in chars.items()],
+        "library": list(lib.keys()),
+        "projects": [{"id": k, "title": v.get("title") or f"Проект {k}", "status": v.get("status", "done"),
+                      "preview": bool(v.get("preview")), "eta": v.get("eta"), "total": v.get("total", 180),
+                      "created": v.get("created", 0)} for k, v in projects.items()],
+        "profile": {"plan": client.get("plan", "Без подписки"), "until": client.get("until", ""),
+                    "balance": client.get("balance", 0),
+                    "films": sum(1 for v in projects.values() if v.get("status") == "done" and not v.get("preview"))},
+    })
+
+
 async def run_web() -> None:
     """Отдаёт мини-апп (index.html) по домену Bothost, порт PORT (по умолчанию 3000)."""
     page = Path(__file__).with_name("index.html")
     app = web.Application()
     app.router.add_get("/", lambda r: web.FileResponse(page))
+    app.router.add_get("/api/me", api_me)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
     runner = web.AppRunner(app)
     await runner.setup()
