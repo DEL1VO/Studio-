@@ -216,7 +216,7 @@ const tg = window.Telegram && Telegram.WebApp;
 const inTG = !!(tg && tg.initData);
 if (tg){ tg.ready(); tg.expand(); try{ tg.setHeaderColor("#0b0d10"); tg.setBackgroundColor("#0b0d10"); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); }catch(e){} }
 const user = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || {id:0, first_name:"Гость"};
-const isAdmin = CONFIG.ADMIN_IDS.includes(user.id);
+let isAdmin = CONFIG.ADMIN_IDS.includes(user.id);
 const haptic = (t="light") => { try{ tg.HapticFeedback.impactOccurred(t) }catch(e){} };
 
 /* ───────────── ДАННЫЕ ───────────── */
@@ -234,22 +234,24 @@ const S = {
   ],
   profile:{plan:"Студия Pro", until:"до 24 декабря", balance:1240, films:14}
 };
-const demo = !CONFIG.FIREBASE_URL;
+const demo = !inTG;   // демо-данные только вне Telegram (в обычном браузере)
 
 async function loadData(){
-  if (demo || !user.id) return;
+  if (demo) return;
+  // внутри Telegram показываем только реальные данные клиента
+  S.chars=[]; S.lib=[]; S.projects=[];
+  S.profile={plan:"Без подписки", until:"", balance:0, films:0};
+  S.script="";
   try{
-    const [c,p,l] = await Promise.all([
-      fetch(`${CONFIG.FIREBASE_URL}/clients/${user.id}.json`).then(r=>r.json()),
-      fetch(`${CONFIG.FIREBASE_URL}/clients/${user.id}/projects.json`).then(r=>r.json()),
-      fetch(`${CONFIG.FIREBASE_URL}/library/characters.json`).then(r=>r.json())
-    ]);
-    if (c && c.characters) S.chars = Object.entries(c.characters).map(([n,v])=>({name:n, voice:v.voice||CONFIG.VOICES[0]}));
-    else if (c) S.chars = [];
-    if (p) S.projects = Object.entries(p).map(([id,v])=>({id, title:v.title||("Проект "+id), status:v.status||"done", mode:v.preview?"preview":"render", eta:v.eta, total:v.total||180, url:v.url||"", dur:v.dur||""})).reverse();
-    if (l) S.lib = Object.keys(l).map(n=>({name:n, voice:CONFIG.VOICES[0]}));
-    if (c) S.profile = Object.assign(S.profile, {balance:c.balance??S.profile.balance, films:c.films??S.profile.films, plan:c.plan||S.profile.plan, until:c.until||S.profile.until});
-  }catch(e){ console.warn("firebase", e) }
+    const r = await fetch("/api/me", {headers:{"X-Init-Data": tg.initData}});
+    if(!r.ok) throw new Error("api "+r.status);
+    const d = await r.json();
+    isAdmin = !!d.admin;
+    S.chars = d.characters.map(c=>({name:c.name, voice:c.voice||CONFIG.VOICES[0]}));
+    S.lib = d.library.map(n=>({name:n, voice:CONFIG.VOICES[0]}));
+    S.projects = d.projects.sort((a,b)=>b.created-a.created).map(p=>({id:p.id, title:p.title, status:p.status, mode:p.preview?"preview":"render", eta:p.eta, total:p.total, url:"", dur:""}));
+    S.profile = d.profile;
+  }catch(e){ console.warn("api", e); toast("Не удалось загрузить данные") }
 }
 
 /* ───────────── УТИЛИТЫ ───────────── */
@@ -397,7 +399,7 @@ function viewProfile(){
     <div class="grid2" style="margin-top:10px"><div class="card"><div class="xs mut">Баланс</div><div class="title" style="font-size:22px;margin-top:6px">${p.balance.toLocaleString("ru")} ₽</div></div><div class="card" style="margin-top:0"><div class="xs mut">Мультфильмов</div><div class="title" style="font-size:22px;margin-top:6px">${p.films}</div></div></div>
     <h2>Аккаунт</h2>
     ${[["i-wallet","Пополнить баланс","topup"],["i-shield","Условия и конфиденциальность","terms"],["i-user","Поддержка","support"]].map(r=>`<button class="item" style="width:100%;color:var(--tx);font:inherit;cursor:pointer;text-align:left" data-act="${r[2]}"><div class="ico neutral" style="width:38px;height:38px">${ic(r[0])}</div><div class="grow title" style="font-weight:500">${r[1]}</div>${ic("i-chev").replace('class="ic "','class="ic" style="color:var(--dim)"')}</button>`).join("")}
-    ${demo?`<p class="xs mut" style="text-align:center;margin-top:20px;line-height:1.5">Демо-данные. Укажите FIREBASE_URL в настройках файла, чтобы показать реальные данные клиента.</p>`:""}
+    ${demo?`<p class="xs mut" style="text-align:center;margin-top:20px;line-height:1.5">Демо-режим: приложение открыто вне Telegram. Откройте его кнопкой TajStudio в боте — там будут ваши данные.</p>`:""}
   </div>`;
 }
 
