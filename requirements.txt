@@ -4,4 +4,3 @@ firebase-admin>=6.5
 Pillow>=10
 numpy>=1.26
 scipy>=1.11
-piper-tts>=1.3
